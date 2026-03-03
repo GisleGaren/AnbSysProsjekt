@@ -8,3 +8,8 @@ https://github.com/Vineethreddyc11/Hybrid-Recommendation-System-with-Neural-Netw
 https://github.com/AjNavneet/Hybrid-Recommender-LightFM-Retail
 https://github.com/datkanber/hybrid-recommender
 Meir avansert: https://github.com/recommenders-team/recommenders
+
+
+
+USE ENV (ÅSMUND DIN JÆVLA IDIOT):
+- Python (recommenders) (3.11.14)
