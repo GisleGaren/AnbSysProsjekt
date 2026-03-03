@@ -1,3 +1,3 @@
 smallDataset/
 *.zip
-__pychache__
+*.pyc
