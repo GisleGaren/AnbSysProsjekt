@@ -26,7 +26,7 @@ import json
 import os
 import numpy as np
 from collections import defaultdict
-from sklearn.metrics import roc_auc_score
+from evaluation import evaluate
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE = "smallDataset"
@@ -140,92 +140,6 @@ def cosine_sim(a, b):
     return float(np.dot(a, b) / (na * nb))
 
 
-# ─── 5. Evaluation metrics ───────────────────────────────────────────────────
-def dcg_at_k(relevance, k):
-    relevance = np.array(relevance[:k], dtype=np.float32)
-    if relevance.size == 0:
-        return 0.0
-    gains = relevance / np.log2(np.arange(2, relevance.size + 2))
-    return gains.sum()
-
-
-def ndcg_at_k(relevance, k):
-    ideal = sorted(relevance, reverse=True)
-    idcg  = dcg_at_k(ideal, k)
-    return dcg_at_k(relevance, k) / idcg if idcg > 0 else 0.0
-
-
-def mrr(relevance):
-    for i, r in enumerate(relevance):
-        if r == 1:
-            return 1.0 / (i + 1)
-    return 0.0
-
-
-def evaluate(behaviors_path, news_vecs, global_pop, dim=100):
-    """
-    Parse behaviors.tsv, score each impression, compute metrics.
-    Returns dict of metric -> float.
-    """
-    aucs, mrrs, ndcg5s, ndcg10s = [], [], [], []
-    skipped = 0
-
-    with open(behaviors_path, encoding="utf-8") as f:
-        for line in f:
-            cols = line.strip().split("\t")
-            if len(cols) < 5:
-                continue
-
-            history_str    = cols[3].strip()
-            impressions_str= cols[4].strip()
-
-            history = history_str.split() if history_str else []
-            impressions = impressions_str.split()
-
-            if not impressions:
-                continue
-
-            # Parse impression list: "N12345-1" or "N12345-0"
-            candidates, labels = [], []
-            for imp in impressions:
-                parts = imp.rsplit("-", 1)
-                if len(parts) != 2:
-                    continue
-                nid, label = parts
-                candidates.append(nid)
-                labels.append(int(label))
-
-            if sum(labels) == 0 or sum(labels) == len(labels):
-                skipped += 1
-                continue  # can't compute AUC for degenerate cases
-
-            user_vec = build_user_vector(history, news_vecs, dim)
-
-            if np.all(user_vec == 0):
-                # COLD START CASE: Use popularity instead of similarity
-                scores = [global_pop.get(nid, 0) for nid in candidates]
-            else:
-                # WARM START CASE: Your existing similarity logic
-                scores = [cosine_sim(user_vec, news_vecs.get(nid, np.zeros(dim))) 
-                        for nid in candidates]
-
-            # Sort by score descending → ranked list of labels
-            ranked = [lbl for _, lbl in sorted(zip(scores, labels), reverse=True)]
-
-            aucs.append(roc_auc_score(labels, scores))
-            mrrs.append(mrr(ranked))
-            ndcg5s.append(ndcg_at_k(ranked, 5))
-            ndcg10s.append(ndcg_at_k(ranked, 10))
-
-    print(f"  Evaluated {len(aucs)} impressions | Skipped (degenerate): {skipped}")
-    return {
-        "AUC":      np.mean(aucs),
-        "MRR":      np.mean(mrrs),
-        "nDCG@5":   np.mean(ndcg5s),
-        "nDCG@10":  np.mean(ndcg10s),
-    }
-
-
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
     dim = 100
@@ -251,7 +165,13 @@ def main():
         news_vecs = build_news_vectors(news_path, entity_embeddings, dim)
 
         print("\n[3] Evaluating...")
-        metrics = evaluate(behaviors_path, news_vecs, global_pop, dim)
+        def score_fn(history, candidates, _news_vecs=news_vecs, _pop=global_pop, _dim=dim):
+            user_vec = build_user_vector(history, _news_vecs, _dim)
+            if np.all(user_vec == 0):
+                return [_pop.get(nid, 0) for nid in candidates]
+            return [cosine_sim(user_vec, _news_vecs.get(nid, np.zeros(_dim))) for nid in candidates]
+
+        metrics = evaluate(behaviors_path, score_fn)
 
         print(f"\n  Results on {split}:")
         for k, v in metrics.items():
