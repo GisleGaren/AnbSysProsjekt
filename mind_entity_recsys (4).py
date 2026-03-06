@@ -31,7 +31,7 @@ from sklearn.metrics import roc_auc_score
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE = "smallDataset"
 TRAIN_DIR = os.path.join(BASE, "MINDsmall_train")
-DEV_DIR   = os.path.join(BASE, "MINDSmall_dev")
+DEV_DIR   = os.path.join(BASE, "MINDsmall_dev")
 
 # ─── 1. Load entity embeddings ────────────────────────────────────────────────
 def load_entity_embeddings(path):
@@ -117,6 +117,20 @@ def build_user_vector(history_ids, news_vecs, dim=100):
         return np.zeros(dim, dtype=np.float32)
     return np.mean(vecs, axis=0)
 
+def build_global_popularity(behaviors_path):
+    """Returns dict: news_id -> click_count from the training set."""
+    pop_counts = defaultdict(int)
+    with open(behaviors_path, "r", encoding="utf-8") as f:
+        for line in f:
+            cols = line.strip().split("\t")
+            if len(cols) < 4: continue
+            
+            # History is column index 3 (0-indexed)
+            history = cols[3].split()
+            for nid in history:
+                pop_counts[nid] += 1
+    print(f"  Calculated popularity for {len(pop_counts)} unique news items.")
+    return pop_counts
 
 # ─── 4. Cosine similarity ─────────────────────────────────────────────────────
 def cosine_sim(a, b):
@@ -148,7 +162,7 @@ def mrr(relevance):
     return 0.0
 
 
-def evaluate(behaviors_path, news_vecs, dim=100):
+def evaluate(behaviors_path, news_vecs, global_pop, dim=100):
     """
     Parse behaviors.tsv, score each impression, compute metrics.
     Returns dict of metric -> float.
@@ -186,7 +200,13 @@ def evaluate(behaviors_path, news_vecs, dim=100):
                 continue  # can't compute AUC for degenerate cases
 
             user_vec = build_user_vector(history, news_vecs, dim)
-            scores   = [cosine_sim(user_vec, news_vecs.get(nid, np.zeros(dim)))
+
+            if np.all(user_vec == 0):
+                # COLD START CASE: Use popularity instead of similarity
+                scores = [global_pop.get(nid, 0) for nid in candidates]
+            else:
+                # WARM START CASE: Your existing similarity logic
+                scores = [cosine_sim(user_vec, news_vecs.get(nid, np.zeros(dim))) 
                         for nid in candidates]
 
             # Sort by score descending → ranked list of labels
@@ -210,6 +230,10 @@ def evaluate(behaviors_path, news_vecs, dim=100):
 def main():
     dim = 100
 
+    train_behaviors = os.path.join(TRAIN_DIR, "behaviors.tsv")
+    print("\n[0] Building Global Popularity from Training data...")
+    global_pop = build_global_popularity(train_behaviors)
+
     for split, data_dir in [("TRAIN", TRAIN_DIR), ("DEV", DEV_DIR)]:
         print(f"\n{'='*50}")
         print(f" Split: {split}  ({data_dir})")
@@ -227,7 +251,7 @@ def main():
         news_vecs = build_news_vectors(news_path, entity_embeddings, dim)
 
         print("\n[3] Evaluating...")
-        metrics = evaluate(behaviors_path, news_vecs, dim)
+        metrics = evaluate(behaviors_path, news_vecs, global_pop, dim)
 
         print(f"\n  Results on {split}:")
         for k, v in metrics.items():
