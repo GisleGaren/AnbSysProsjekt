@@ -1,3 +1,4 @@
 smallDataset/
 *.zip
 *.pyc
+models/
