@@ -1,9 +1,9 @@
 """
-MIND Hybrid Recommender: SVD-based CF + Content (SBERT + TransE entity)
+MIND Hybrid Recommender: Item-Based CF + Content (SBERT + TransE entity)
 =========================================================================
 Combines two signals per impression:
-  - CF score      : matrix-factorization CF via TF-IDF weighted TruncatedSVD
-                    on a user-article interaction matrix (history + impression clicks)
+  - CF score      : item-based collaborative filtering via cosine similarity on a
+                    normalised user-article interaction matrix (history + impression clicks)
   - Content score : cosine similarity between user profile and candidate content vectors
                     (title_sbert[768] | abstract_sbert[768] | entity[100] — optional)
 
@@ -14,14 +14,14 @@ scales are comparable regardless of how many candidates are in the impression.
 
 CF pipeline:
   1. Build binary user-article matrix from history AND impression clicks (label=1)
-  2. Apply TF-IDF weighting (downweights popular articles, IDF over users)
-  3. TruncatedSVD -> article latent vectors (CF_COMPONENTS dims)
-  4. At score time: user profile = mean of history article latent vecs; score = dot product
+  2. Transpose to article-user matrix, L2-normalise each article row
+  3. At score time: for each candidate, compute cosine sim against all history articles,
+     take the mean — articles similar to what the user read score higher
 
 Fallback chain:
-  - Candidate not in CF matrix  -> CF score = 0 for that candidate
-  - User has no CF history       -> CF scores all 0, weight shifts entirely to content
-  - User has no content history  -> content scores all 0, fall back to global popularity
+  - Candidate not in CF matrix   -> CF score = 0 for that candidate
+  - User has no CF history        -> CF scores all 0, weight shifts entirely to content
+  - User has no content history   -> content scores all 0, fall back to global popularity
 
 Run generate_sbert_cache.py first to produce the SBERT v2 cache.
 
@@ -37,15 +37,12 @@ import numpy as np
 from collections import defaultdict
 from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
-from sklearn.feature_extraction.text import TfidfTransformer
-from sklearn.decomposition import TruncatedSVD
 import pandas as pd
 from evaluation import evaluate
 
 # --- Config ------------------------------------------------------------------
-ALPHA         = 0.2  # CF weight; (1 - ALPHA) goes to content
-CF_COMPONENTS = 150  # SVD latent dimensions
-USE_ENTITY    = False  # set True to append confidence-weighted TransE entity (100-dim)
+ALPHA      = 0.5   # CF weight; (1 - ALPHA) goes to content
+USE_ENTITY = False  # set True to append confidence-weighted TransE entity (100-dim)
 
 # --- Paths -------------------------------------------------------------------
 BASE      = "smallDataset"
@@ -65,16 +62,16 @@ TOTAL_DIM       = TOTAL_SBERT_DIM + (ENTITY_DIM if USE_ENTITY else 0)
 
 def build_cf_model(behaviors_path):
     """
-    Builds a TF-IDF weighted TruncatedSVD CF model from training behaviors.
+    Builds an item-based CF model from training behaviors.
 
     Interaction matrix includes both history clicks and impression clicks
     (label=1) from train — both are legitimate signals with no leakage risk.
 
     Pipeline:
-      binary user-article matrix -> TF-IDF weighting -> TruncatedSVD
-      -> L2-normalised article latent vectors (CF_COMPONENTS dims)
+      binary user-article matrix -> transpose to article-user -> L2-normalise rows
+      -> dot products between article rows give cosine similarities
 
-    Returns (article_factors, article_to_idx).
+    Returns (article_user_norm, article_to_idx).
     """
     COLS = ["impression_id", "user_id", "time", "history", "impressions"]
     train = pd.read_csv(behaviors_path, sep="\t", header=None, names=COLS)
@@ -112,40 +109,31 @@ def build_cf_model(behaviors_path):
     )
     print(f"  Interaction matrix: {interaction.shape[0]} users x {interaction.shape[1]} articles")
 
-    # TF-IDF: downweight articles clicked by many users
-    tfidf = TfidfTransformer(norm="l2", use_idf=True, smooth_idf=True)
-    interaction_tfidf = tfidf.fit_transform(interaction)  # (users, articles)
+    # Article-user matrix, L2-normalised per row -> dot products = cosine similarities
+    article_user_norm = normalize(interaction.T.tocsr(), norm="l2", axis=1, copy=False)
 
-    # SVD: factorize into latent space
-    n_components = min(CF_COMPONENTS, interaction_tfidf.shape[1] - 1)
-    svd = TruncatedSVD(n_components=n_components, random_state=42)
-    svd.fit(interaction_tfidf)
-
-    # Article latent vectors: V from SVD (articles, n_components)
-    article_factors = svd.components_.T.astype(np.float32)
-    article_factors = normalize(article_factors, norm="l2", axis=1, copy=False)
-
-    print(f"  SVD: {n_components} components, explained variance: {svd.explained_variance_ratio_.sum():.3f}")
-    return article_factors, article_to_idx
+    print(f"  Article-user matrix: {article_user_norm.shape}, L2-normalised")
+    return article_user_norm, article_to_idx
 
 
-def cf_scores(history, candidates, article_factors, article_to_idx):
-    """SVD-based CF: score candidates by dot product with mean history latent vector."""
+def cf_scores(history, candidates, article_user_norm, article_to_idx):
+    """Item-based CF: score candidates by mean cosine similarity to history articles."""
     hist_idx = [article_to_idx[h] for h in history if h in article_to_idx]
     if not hist_idx:
         return [0.0] * len(candidates)
 
-    user_vec = article_factors[hist_idx].mean(axis=0)
-    norm = np.linalg.norm(user_vec)
-    if norm == 0:
-        return [0.0] * len(candidates)
-    user_vec /= norm
+    hist_vecs = article_user_norm[hist_idx]  # (h, n_users)
 
-    cand_idx = [article_to_idx.get(c) for c in candidates]
-    return [
-        float(article_factors[i] @ user_vec) if i is not None else 0.0
-        for i in cand_idx
-    ]
+    scores = []
+    for cand in candidates:
+        c_idx = article_to_idx.get(cand)
+        if c_idx is None:
+            scores.append(0.0)
+            continue
+        cand_vec = article_user_norm[c_idx]
+        sims = np.asarray((cand_vec @ hist_vecs.T).todense()).ravel()
+        scores.append(float(sims.mean()))
+    return scores
 
 
 # =============================================================================
@@ -298,8 +286,8 @@ def main():
                 "Run 'python generate_sbert_cache.py' first to generate SBERT embeddings."
             )
 
-    print("\n[0] Building CF model from training behaviors...")
-    article_factors, article_to_idx = build_cf_model(
+    print("\n[0] Building item-based CF model from training behaviors...")
+    article_user_norm, article_to_idx = build_cf_model(
         os.path.join(TRAIN_DIR, "behaviors.tsv")
     )
 
@@ -324,7 +312,7 @@ def main():
 
     print("\n[4] Evaluating hybrid on DEV...")
     def score_fn(history, candidates,
-                 _au=article_factors, _ai=article_to_idx,
+                 _au=article_user_norm, _ai=article_to_idx,
                  _nv=news_vecs, _pop=global_pop):
         return hybrid_score_fn(history, candidates, _au, _ai, _nv, _pop)
 
