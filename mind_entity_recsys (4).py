@@ -214,7 +214,8 @@ def main():
             cand_mat = np.stack([_news_vecs.get(nid, zero) for nid in candidates])
             return list(cand_mat @ user_vec)
 
-        metrics = evaluate(os.path.join(data_dir, "behaviors.tsv"), score_fn)
+        metrics = evaluate(os.path.join(data_dir, "behaviors.tsv"), score_fn,
+                           news_vecs=news_vecs, global_pop=global_pop)
 
         print(f"\n  Results on {split}:")
         for k, v in metrics.items():
