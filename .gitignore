@@ -4,3 +4,5 @@ dataset/
 __pycache__/
 *.pyc
 .claude/
+smallDataset/sbert_cache/sbert_v2_train.npz
+smallDataset/sbert_cache/sbert_v2_dev.npz

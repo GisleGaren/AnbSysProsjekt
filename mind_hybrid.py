@@ -316,7 +316,8 @@ def main():
                  _nv=news_vecs, _pop=global_pop):
         return hybrid_score_fn(history, candidates, _au, _ai, _nv, _pop)
 
-    metrics = evaluate(os.path.join(DEV_DIR, "behaviors.tsv"), score_fn)
+    metrics = evaluate(os.path.join(DEV_DIR, "behaviors.tsv"), score_fn,
+                       news_vecs=news_vecs, global_pop=global_pop)
 
     print(f"\n  Results on DEV (ALPHA={ALPHA}):")
     for k, v in metrics.items():

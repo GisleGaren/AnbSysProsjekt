@@ -21,7 +21,7 @@ And must return a list of floats of the same length as candidates.
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
-from typing import Callable
+from typing import Callable, Optional
 
 
 # ─── Metric helpers ───────────────────────────────────────────────────────────
@@ -46,11 +46,43 @@ def mrr(relevance: list) -> float:
     return 0.0
 
 
+def ild_at_k(top_k_ids: list[str], news_vecs: dict, k: int) -> float:
+    """
+    Intra-List Diversity at k: average pairwise cosine distance among top-k items.
+    Items not in news_vecs are skipped. Returns 0.0 if fewer than 2 known items.
+    """
+    vecs = [news_vecs[nid] for nid in top_k_ids[:k] if nid in news_vecs]
+    if len(vecs) < 2:
+        return 0.0
+    mat = np.stack(vecs)                      # (m, d)
+    # cosine similarity matrix (vectors are pre-normalised)
+    sim = mat @ mat.T                         # (m, m)
+    m = len(vecs)
+    # sum of upper triangle (excluding diagonal)
+    total_sim = (sim.sum() - np.trace(sim)) / 2
+    n_pairs = m * (m - 1) / 2
+    return float(1.0 - total_sim / n_pairs)   # distance = 1 - similarity
+
+
+def novelty_at_k(top_k_ids: list[str], global_pop: dict, total_clicks: int, k: int) -> float:
+    """
+    Novelty at k: mean -log2(pop(i) / total_clicks) for top-k items.
+    Items with no recorded clicks are treated as pop=1 (maximum novelty).
+    """
+    scores = []
+    for nid in top_k_ids[:k]:
+        pop = global_pop.get(nid, 1)
+        scores.append(-np.log2(pop / total_clicks))
+    return float(np.mean(scores)) if scores else 0.0
+
+
 # ─── Central evaluation loop ──────────────────────────────────────────────────
 
 def evaluate(
     behaviors_path: str,
     score_fn: Callable[[list[str], list[str]], list[float]],
+    news_vecs: Optional[dict] = None,
+    global_pop: Optional[dict] = None,
     verbose: bool = True,
 ) -> dict[str, float]:
     """
@@ -63,15 +95,25 @@ def evaluate(
     score_fn : callable
         score_fn(history, candidates) -> list of floats
         where history and candidates are lists of news IDs.
+    news_vecs : dict, optional
+        news_id -> L2-normalised np.array. When provided, ILD@5 and ILD@10
+        are computed over the top-k ranked candidates.
+    global_pop : dict, optional
+        news_id -> click count from training. When provided, Novelty@5 and
+        Novelty@10 are computed over the top-k ranked candidates.
     verbose : bool
         Print progress summary when done.
 
     Returns
     -------
     dict with keys: AUC, MRR, nDCG@5, nDCG@10
+    and optionally: ILD@5, ILD@10, Novelty@5, Novelty@10
     """
     aucs, mrrs, ndcg5s, ndcg10s = [], [], [], []
+    ild5s, ild10s, nov5s, nov10s = [], [], [], []
     skipped = 0
+
+    total_clicks = sum(global_pop.values()) if global_pop else 1
 
     with open(behaviors_path, encoding="utf-8") as f:
         for line in f:
@@ -101,19 +143,36 @@ def evaluate(
 
             scores = score_fn(history, candidates)
 
-            ranked = [lbl for _, lbl in sorted(zip(scores, labels), reverse=True)]
+            ranked_pairs = sorted(zip(scores, candidates, labels), reverse=True)
+            ranked_labels = [lbl for _, _, lbl in ranked_pairs]
+            ranked_ids    = [nid for _, nid, _  in ranked_pairs]
 
             aucs.append(roc_auc_score(labels, scores))
-            mrrs.append(mrr(ranked))
-            ndcg5s.append(ndcg_at_k(ranked, 5))
-            ndcg10s.append(ndcg_at_k(ranked, 10))
+            mrrs.append(mrr(ranked_labels))
+            ndcg5s.append(ndcg_at_k(ranked_labels, 5))
+            ndcg10s.append(ndcg_at_k(ranked_labels, 10))
+
+            if news_vecs is not None:
+                ild5s.append(ild_at_k(ranked_ids, news_vecs, 5))
+                ild10s.append(ild_at_k(ranked_ids, news_vecs, 10))
+
+            if global_pop is not None:
+                nov5s.append(novelty_at_k(ranked_ids, global_pop, total_clicks, 5))
+                nov10s.append(novelty_at_k(ranked_ids, global_pop, total_clicks, 10))
 
     if verbose:
         print(f"  Evaluated {len(aucs)} impressions | Skipped (degenerate): {skipped}")
 
-    return {
+    result = {
         "AUC":     float(np.mean(aucs)),
         "MRR":     float(np.mean(mrrs)),
         "nDCG@5":  float(np.mean(ndcg5s)),
         "nDCG@10": float(np.mean(ndcg10s)),
     }
+    if ild5s:
+        result["ILD@5"]  = float(np.mean(ild5s))
+        result["ILD@10"] = float(np.mean(ild10s))
+    if nov5s:
+        result["Novelty@5"]  = float(np.mean(nov5s))
+        result["Novelty@10"] = float(np.mean(nov10s))
+    return result

@@ -184,7 +184,6 @@ def main():
         entity_vecs = load_entity_embeddings(os.path.join(DEV_DIR, "entity_embedding.vec"))
 
     for split, data_dir, cache_file in [
-        ("TRAIN", TRAIN_DIR, "sbert_v2_train.npz"),
         ("DEV",   DEV_DIR,   "sbert_v2_dev.npz"),
     ]:
         print(f"\n{'='*50}")
@@ -214,7 +213,8 @@ def main():
             cand_mat = np.stack([_news_vecs.get(nid, zero) for nid in candidates])
             return list(cand_mat @ user_vec)
 
-        metrics = evaluate(os.path.join(data_dir, "behaviors.tsv"), score_fn)
+        metrics = evaluate(os.path.join(data_dir, "behaviors.tsv"), score_fn,
+                           news_vecs=news_vecs, global_pop=global_pop)
 
         print(f"\n  Results on {split}:")
         for k, v in metrics.items():
