@@ -110,11 +110,26 @@ def cf_score(history: list[str], candidates: list[str]) -> list[float]:
 
     return scores
 
-# ─── Step 5: Evaluate ────────────────────────────────────────────────────────
+# ─── Step 5: Build news_vecs and global_pop for ILD / Novelty ────────────────
+
+# news_vecs: dense L2-normalised click vectors (already normalised above)
+news_vecs = {nid: np.asarray(article_user_norm[idx].todense()).ravel()
+             for nid, idx in article_to_idx.items()}
+
+# global_pop: click counts from training histories
+print("Building global popularity...")
+global_pop: dict[str, int] = defaultdict(int)
+for _, row in train.iterrows():
+    if isinstance(row["history"], str) and row["history"].strip():
+        for nid in row["history"].split():
+            global_pop[nid] += 1
+print(f"  Popularity tracked for {len(global_pop)} articles.")
+
+# ─── Step 6: Evaluate ────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     print("\nEvaluating on dev set...")
-    metrics = evaluate(DEV_BEHAVIORS, cf_score)
+    metrics = evaluate(DEV_BEHAVIORS, cf_score, news_vecs=news_vecs, global_pop=global_pop)
 
     print("\nItem-Based CF — Dev Set Results")
     print("-" * 40)

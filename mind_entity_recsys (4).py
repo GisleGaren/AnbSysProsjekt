@@ -184,7 +184,6 @@ def main():
         entity_vecs = load_entity_embeddings(os.path.join(DEV_DIR, "entity_embedding.vec"))
 
     for split, data_dir, cache_file in [
-        ("TRAIN", TRAIN_DIR, "sbert_v2_train.npz"),
         ("DEV",   DEV_DIR,   "sbert_v2_dev.npz"),
     ]:
         print(f"\n{'='*50}")
