@@ -43,7 +43,7 @@ import os
 import json
 import numpy as np
 from collections import defaultdict
-from evaluation import evaluate
+from recommender.evaluation import evaluate
 
 # --- Paths -------------------------------------------------------------------
 BASE       = "smallDataset"

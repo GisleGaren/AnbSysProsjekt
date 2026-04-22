@@ -38,7 +38,7 @@ from collections import defaultdict
 from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
 import pandas as pd
-from evaluation import evaluate
+from recommender.evaluation import evaluate
 
 # --- Config ------------------------------------------------------------------
 ALPHA      = 0.5   # CF weight; (1 - ALPHA) goes to content

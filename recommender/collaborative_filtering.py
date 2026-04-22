@@ -17,7 +17,7 @@ from collections import defaultdict
 from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
 
-from evaluation import evaluate
+from recommender.evaluation import evaluate
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 
